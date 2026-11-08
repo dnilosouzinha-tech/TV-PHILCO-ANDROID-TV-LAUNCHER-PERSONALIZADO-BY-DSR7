@@ -93,13 +93,45 @@ class MainActivity : Activity() {
 
     private fun showAllApps() {
         val pm = packageManager
-        val list = pm.queryIntentActivities(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0
-        ).sortedBy { it.loadLabel(pm).toString().lowercase() }
-        val names = list.map { it.loadLabel(pm).toString() }.toTypedArray()
+        val tv = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0)
+        val tvPkgs = tv.map { it.activityInfo.packageName }.toSet()
+        val phone = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .filter { it.activityInfo.packageName !in tvPkgs && it.activityInfo.packageName != packageName }
+        val all = (tv.map { Pair(it, false) } + phone.map { Pair(it, true) })
+            .sortedBy { it.first.loadLabel(pm).toString().lowercase() }
+        val names = all.map { (if (it.second) "[cel] " else "") + it.first.loadLabel(pm).toString() }.toTypedArray()
         AlertDialog.Builder(this).setTitle("Todos os Apps").setItems(names) { _, which ->
-            pm.getLeanbackLaunchIntentForPackage(list[which].activityInfo.packageName)?.let { safeStart(it) }
+            val (info, isPhone) = all[which]
+            val pkg = info.activityInfo.packageName
+            val i = if (isPhone) pm.getLaunchIntentForPackage(pkg) else pm.getLeanbackLaunchIntentForPackage(pkg)
+            i?.let { safeStart(it) }
         }.show()
+    }
+
+    private fun liveChannels(): List<View> {
+        val out = mutableListOf<View>()
+        try {
+            val c = contentResolver.query(
+                TvContract.Channels.CONTENT_URI,
+                arrayOf(
+                    TvContract.Channels._ID,
+                    TvContract.Channels.COLUMN_DISPLAY_NUMBER,
+                    TvContract.Channels.COLUMN_DISPLAY_NAME
+                ),
+                null, null, null
+            )
+            c?.use {
+                while (it.moveToNext() && out.size < 6) {
+                    val id = it.getLong(0)
+                    val label = (it.getString(1) ?: "") + " " + (it.getString(2) ?: "")
+                    out.add(btn(label.trim(), 10f, 11) {
+                        safeStart(Intent(Intent.ACTION_VIEW, TvContract.buildChannelUri(id)))
+                    })
+                }
+            }
+        } catch (e: Exception) {
+        }
+        return out
     }
 
     private fun group(title: String, items: List<View>): LinearLayout {
@@ -206,6 +238,13 @@ class MainActivity : Activity() {
         mid.addView(group("Entradas", inputs), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         mid.addView(group("Atalhos", shortcuts))
         root.addView(mid)
+
+        // Canais ao vivo (TV aberta)
+        val live = liveChannels()
+        if (live.isNotEmpty()) {
+            root.addView(spacer(18))
+            root.addView(group("Canais ao vivo", live))
+        }
         root.addView(spacer(26))
 
         // Relógio + FPS + memória
